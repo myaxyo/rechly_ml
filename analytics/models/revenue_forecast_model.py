@@ -161,6 +161,11 @@ class RevenueForecastModelService:
             "model_version": version,
             "feature_columns": feature_columns,
             "metrics": metrics,
+            "validation_errors": {
+                "naive": [float(err) for err in naive_errors],
+                "moving_average": [float(err) for err in ma_errors],
+                "gradient_boosting": [float(err) for err in model_errors],
+            },
             "seed": self.seed,
         }
 
