@@ -13,6 +13,7 @@ from analytics.api.serializers import (
 from analytics.models.late_payment_model import LatePaymentModelService
 from analytics.models.revenue_forecast_model import RevenueForecastModelService
 from analytics.services.data_loader import load_appwrite_data
+from analytics.services.experiment_store import ExperimentStore
 from analytics.services.feature_engineering import build_late_payment_training_dataset
 from analytics.services.evaluation import compare_models_statistically
 
@@ -28,6 +29,23 @@ def train_late_payment(request):
 
         service = LatePaymentModelService()
         metrics = service.train_model(feature_dataset.frame)
+        experiment_store = ExperimentStore()
+
+        data_summary = {
+            "rows_used": int(len(feature_dataset.frame)),
+            "label_positive_count": int((feature_dataset.frame["late"] == 1).sum()),
+            "label_negative_count": int((feature_dataset.frame["late"] == 0).sum()),
+            "label_positive_rate": float(feature_dataset.frame["late"].mean())
+            if len(feature_dataset.frame)
+            else None,
+        }
+
+        run_record = experiment_store.record_run(
+            task="train_late_payment",
+            metrics=metrics,
+            data_summary=data_summary,
+            model_version=metrics.get("model_version"),
+        )
 
         return Response(
             {
@@ -35,6 +53,7 @@ def train_late_payment(request):
                 "task": "train_late_payment",
                 "trained_at": datetime.now(timezone.utc).isoformat(),
                 "metrics": metrics,
+                "experiment_run": run_record,
             }
         )
     except Exception as exc:
@@ -86,15 +105,34 @@ def train_revenue(request):
         service = RevenueForecastModelService()
         metrics = service.train_model(data.invoices)
 
-        baseline_mae = [
-            metrics["metrics"]["naive"]["mae"],
-            metrics["metrics"]["moving_average"]["mae"],
-        ]
-        candidate_mae = [
-            metrics["metrics"]["gradient_boosting"]["mae"],
-            metrics["metrics"]["gradient_boosting"]["mae"],
-        ]
-        statistical = compare_models_statistically(baseline_mae, candidate_mae)
+        errors = metrics.get("validation_errors", {})
+        gb_errors = errors.get("gradient_boosting", [])
+        statistical = {
+            "gradient_boosting_vs_naive": compare_models_statistically(
+                errors.get("naive", []), gb_errors
+            ),
+            "gradient_boosting_vs_moving_average": compare_models_statistically(
+                errors.get("moving_average", []), gb_errors
+            ),
+        }
+
+        experiment_store = ExperimentStore()
+        data_summary = {
+            "raw_invoice_rows": int(len(data.invoices)),
+            "paid_invoice_rows": int((data.invoices["status"] == "paid").sum()),
+            "validation_error_points": {
+                "naive": int(len(errors.get("naive", []))),
+                "moving_average": int(len(errors.get("moving_average", []))),
+                "gradient_boosting": int(len(gb_errors)),
+            },
+        }
+        run_record = experiment_store.record_run(
+            task="train_revenue",
+            metrics=metrics,
+            statistical_summary=statistical,
+            data_summary=data_summary,
+            model_version=metrics.get("model_version"),
+        )
 
         return Response(
             {
@@ -103,6 +141,7 @@ def train_revenue(request):
                 "trained_at": datetime.now(timezone.utc).isoformat(),
                 "metrics": metrics,
                 "statistical_comparison": statistical,
+                "experiment_run": run_record,
             }
         )
     except Exception as exc:

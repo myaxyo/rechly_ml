@@ -101,6 +101,7 @@ def _build_invoice_df(records: Iterable[dict[str, Any]]) -> pd.DataFrame:
                 "paid_date",
                 "days_late",
                 "late",
+                "label_available",
             ]
         )
 
@@ -150,10 +151,21 @@ def _build_invoice_df(records: Iterable[dict[str, Any]]) -> pd.DataFrame:
         np.nan,
     )
 
-    invoices_df["days_late"] = invoices_df["days_late"].fillna(0)
     invoices_df["days_late"] = invoices_df["days_late"].clip(lower=0)
 
-    invoices_df["late"] = (invoices_df["days_late"] > 7).astype(int)
+    label_mask = (
+        paid_mask
+        & invoices_df["due_date"].notna()
+        & invoices_df["paid_date"].notna()
+        & invoices_df["issue_date"].notna()
+        & (invoices_df["paid_date"] >= invoices_df["issue_date"])
+    )
+    invoices_df["late"] = np.where(
+        label_mask,
+        (invoices_df["days_late"] > 7).astype(int),
+        np.nan,
+    )
+    invoices_df["label_available"] = label_mask.astype(int)
 
     for col in ["issue_date", "due_date", "created_at"]:
         invoices_df[col] = invoices_df[col].fillna(invoices_df["created_at"])
@@ -172,6 +184,7 @@ def _build_invoice_df(records: Iterable[dict[str, Any]]) -> pd.DataFrame:
             "paid_date",
             "days_late",
             "late",
+            "label_available",
         ]
     ].copy()
 

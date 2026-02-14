@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Callable, Iterable
 
 import numpy as np
+from scipy.stats import ttest_rel, wilcoxon
 
 
 def bootstrap_confidence_interval(
@@ -39,17 +40,36 @@ def paired_t_test(values_a: Iterable[float], values_b: Iterable[float]):
 
     diff = a - b
     n = diff.size
-    mean_diff = diff.mean()
     std_diff = diff.std(ddof=1) if n > 1 else 0.0
-
     if std_diff == 0.0:
         return {"t_stat": 0.0, "p_value": 1.0}
 
-    t_stat = mean_diff / (std_diff / np.sqrt(n))
+    stat = ttest_rel(a, b, alternative="two-sided")
+    return {"t_stat": float(stat.statistic), "p_value": float(stat.pvalue)}
 
-    # Normal approximation (sufficient for service-level comparison).
-    p_value = float(2 * (1 - 0.5 * (1 + np.math.erf(abs(t_stat) / np.sqrt(2)))))
-    return {"t_stat": float(t_stat), "p_value": p_value}
+
+def wilcoxon_signed_rank_test(values_a: Iterable[float], values_b: Iterable[float]):
+    a = np.asarray(list(values_a), dtype=float)
+    b = np.asarray(list(values_b), dtype=float)
+
+    if a.size == 0 or b.size == 0 or a.size != b.size:
+        return {"w_stat": None, "p_value": None}
+
+    if np.allclose(a, b):
+        return {"w_stat": 0.0, "p_value": 1.0}
+
+    stat = wilcoxon(a, b, zero_method="wilcox", alternative="two-sided", mode="auto")
+    return {"w_stat": float(stat.statistic), "p_value": float(stat.pvalue)}
+
+
+def _cohens_d_paired(values_a: np.ndarray, values_b: np.ndarray) -> float | None:
+    diff = values_a - values_b
+    if diff.size < 2:
+        return None
+    std_diff = float(diff.std(ddof=1))
+    if std_diff == 0.0:
+        return 0.0
+    return float(diff.mean() / std_diff)
 
 
 def compare_models_statistically(
@@ -69,8 +89,20 @@ def compare_models_statistically(
 
     mean_baseline = float(baseline.mean())
     mean_candidate = float(candidate.mean())
+    mean_diff = float((baseline - candidate).mean())
+    relative_improvement_pct = (
+        float((mean_diff / mean_baseline) * 100.0) if mean_baseline != 0 else None
+    )
 
     paired = paired_t_test(baseline, candidate)
+    wilcoxon_result = wilcoxon_signed_rank_test(baseline, candidate)
+    diff_ci = bootstrap_confidence_interval(
+        baseline - candidate,
+        metric_fn=lambda x: float(np.mean(x)),
+        n_bootstrap=2000,
+        alpha=0.05,
+    )
+    effect_size = _cohens_d_paired(baseline, candidate)
 
     if mean_candidate < mean_baseline:
         winner = "candidate"
@@ -81,7 +113,16 @@ def compare_models_statistically(
 
     return {
         "winner": winner,
+        "n_samples": int(baseline.size),
         "mean_baseline_error": mean_baseline,
         "mean_candidate_error": mean_candidate,
+        "mean_error_reduction": mean_diff,
+        "relative_improvement_pct": relative_improvement_pct,
+        "mean_error_reduction_ci_95": diff_ci,
+        "effect_size_cohens_d": effect_size,
         "paired_test": paired,
+        "wilcoxon_test": wilcoxon_result,
+        "significant_at_0_05": bool(
+            paired.get("p_value") is not None and paired["p_value"] < 0.05
+        ),
     }

@@ -47,10 +47,21 @@ def build_late_payment_training_dataset(invoices_df: pd.DataFrame) -> FeatureDat
     previous_count = grp.cumcount()
     df["client_invoice_frequency"] = previous_count.astype(float)
 
-    prev_late_sum = grp["late"].cumsum().shift(1).fillna(0)
+    labeled_indicator = df["late"].notna().astype(int)
+    prior_labeled_count = (
+        labeled_indicator.groupby(df["client_id"], dropna=False)
+        .transform(lambda s: s.cumsum().shift(1).fillna(0))
+        .astype(float)
+    )
+
+    late_binary = df["late"].fillna(0).astype(float)
+    prev_late_sum = (
+        late_binary.groupby(df["client_id"], dropna=False)
+        .transform(lambda s: s.cumsum().shift(1).fillna(0))
+    )
     df["client_late_rate"] = np.where(
-        previous_count > 0,
-        prev_late_sum / previous_count.replace(0, np.nan),
+        prior_labeled_count > 0,
+        prev_late_sum / prior_labeled_count.replace(0, np.nan),
         0.0,
     )
     df["client_late_rate"] = df["client_late_rate"].fillna(0)
@@ -65,7 +76,12 @@ def build_late_payment_training_dataset(invoices_df: pd.DataFrame) -> FeatureDat
             lambda s: s.fillna(0).cumsum().shift(1).fillna(0)
         ).reset_index(level=0, drop=True)
     )
-    prev_late_count = grp["late"].cumsum().shift(1).fillna(0)
+    prev_late_count = (
+        (df["late"] == 1)
+        .astype(int)
+        .groupby(df["client_id"], dropna=False)
+        .transform(lambda s: s.cumsum().shift(1).fillna(0))
+    )
     df["client_avg_days_late"] = np.where(
         prev_late_count > 0,
         prev_late_days_sum / prev_late_count.replace(0, np.nan),
@@ -74,19 +90,22 @@ def build_late_payment_training_dataset(invoices_df: pd.DataFrame) -> FeatureDat
     df["client_avg_days_late"] = df["client_avg_days_late"].fillna(0)
 
     overdue_indicator = (
-        (df["status"].isin(["draft", "sent"]))
-        & (df["due_date"].notna())
-        & (df["due_date"].dt.floor("D") < df["prediction_date"])
+        (df["days_late"].fillna(0) > 30)
+        & df["late"].notna()
     ).astype(int)
-    prev_overdue_sum = overdue_indicator.groupby(df["client_id"]).cumsum().shift(1).fillna(0)
+    prev_overdue_sum = overdue_indicator.groupby(df["client_id"], dropna=False).transform(
+        lambda s: s.cumsum().shift(1).fillna(0)
+    )
     df["client_overdue_rate"] = np.where(
-        previous_count > 0,
-        prev_overdue_sum / previous_count.replace(0, np.nan),
+        prior_labeled_count > 0,
+        prev_overdue_sum / prior_labeled_count.replace(0, np.nan),
         0.0,
     )
     df["client_overdue_rate"] = df["client_overdue_rate"].fillna(0)
 
-    prev_revenue_sum = grp["invoice_amount"].cumsum().shift(1).fillna(0)
+    prev_revenue_sum = grp["invoice_amount"].transform(
+        lambda s: s.cumsum().shift(1).fillna(0)
+    )
     df["client_total_revenue"] = prev_revenue_sum
 
     prev_issue_date = grp["issue_date"].shift(1)
@@ -108,6 +127,10 @@ def build_late_payment_training_dataset(invoices_df: pd.DataFrame) -> FeatureDat
     for col in FEATURE_COLUMNS:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
+    if "label_available" in df.columns:
+        df = df[df["label_available"] == 1].copy()
+    else:
+        df = df[df["late"].notna()].copy()
     df["late"] = df["late"].astype(int)
 
     return FeatureDataset(frame=df, feature_columns=FEATURE_COLUMNS)
