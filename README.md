@@ -1,29 +1,35 @@
-# Rechly ML API (Django)
+# Rechly ML API
 
-Independent ML and analytics microservice for Rechly.
+Optional Django service for Rechly analytics, forecasting, and late-payment risk scoring.
 
 ## Features
 
-- Late-payment model training and scoring
-- Revenue forecasting (30/90 days)
-- Temporal-safe feature engineering
-- Metrics snapshots and model versioning
-- Bearer-token protected API
+- Late-payment model training and prediction
+- Revenue forecasting for the next 30 and 90 days
+- Temporal-safe feature engineering and evaluation
+- Metrics snapshots and experiment metadata
+- Bearer-token protected API endpoints
 
-## Project Layout
+## Setup
 
-- `ml_api/` Django project
-- `analytics/models/` ML model modules
-- `analytics/services/` data loading + features + evaluation
-- `analytics/api/` DRF serializers/views
-- `analytics/utils/` config + security middleware
+1. Create and activate a virtual environment.
+2. Install the dependencies from `requirements.txt`.
+3. Copy `.env.example` to `.env` and fill in all required values.
+4. Run Django migrations.
+5. Start the development server.
 
-## Environment
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+python manage.py migrate
+python manage.py runserver 0.0.0.0:8000
+```
 
-Copy `.env.example` to `.env` and fill values.
+## Required Environment Variables
 
-Required:
-
+- `DJANGO_SECRET_KEY`
 - `ML_SECRET`
 - `APPWRITE_ENDPOINT`
 - `APPWRITE_PROJECT_ID`
@@ -32,18 +38,17 @@ Required:
 - `APPWRITE_INVOICES_COLLECTION_ID`
 - `APPWRITE_CLIENTS_COLLECTION_ID`
 
-## Local Run
+The service expects an Appwrite project that already contains the invoice and client data required for training and prediction. It does not yet include a sample data loader or seeded model artifacts.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python manage.py runserver 0.0.0.0:8000
-```
+## Training and Artifacts
+
+- Trained artifacts are written to `MODEL_ARTIFACT_DIR`.
+- `services/ml_api/artifacts/` is ignored by git and should be backed by persistent storage in production.
+- Predict endpoints will fail until the corresponding models have been trained.
 
 ## API Endpoints
 
-Protected by `Authorization: Bearer <ML_SECRET>`.
+Requests must include `Authorization: Bearer <ML_SECRET>`.
 
 - `POST /train/late-payment`
 - `POST /predict/late-payment`
@@ -51,10 +56,11 @@ Protected by `Authorization: Bearer <ML_SECRET>`.
 - `GET /forecast/revenue`
 - `GET /metrics/late-payment`
 
-Compatibility aliases with `/api/*` prefix are also exposed.
+Compatibility aliases with `/api/*` are also exposed.
 
-## Render Deploy
+## Deployment Notes
 
-- `Procfile` includes Gunicorn entrypoint
-- `runtime.txt` pins Python runtime
-- Set all env variables in Render dashboard
+- `Procfile` contains the Gunicorn entrypoint.
+- `runtime.txt` pins the Python runtime.
+- Set every environment variable explicitly in your hosting provider.
+- Persist `MODEL_ARTIFACT_DIR` if you expect trained models to survive redeploys.

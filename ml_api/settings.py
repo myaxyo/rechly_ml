@@ -6,11 +6,21 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "unsafe-dev-key")
+
+def require_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is not configured")
+    return value
+
+
+SECRET_KEY = require_env("DJANGO_SECRET_KEY")
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
 ALLOWED_HOSTS = [
-    host.strip() for host in os.getenv("ALLOWED_HOSTS", "*").split(",") if host.strip()
+    host.strip()
+    for host in os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+    if host.strip()
 ]
 
 INSTALLED_APPS = [
@@ -60,9 +70,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in os.getenv(
-        "CORS_ALLOWED_ORIGINS", "https://rechly.de,https://www.rechly.de"
-    ).split(",")
+    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(",")
     if origin.strip()
 ]
 
@@ -75,9 +83,7 @@ REST_FRAMEWORK = {
     ],
 }
 
-MODEL_ARTIFACT_DIR = os.getenv(
-    "MODEL_ARTIFACT_DIR", str(BASE_DIR / "artifacts")
-)
+MODEL_ARTIFACT_DIR = os.getenv("MODEL_ARTIFACT_DIR", str(BASE_DIR / "artifacts"))
 MODEL_RANDOM_SEED = int(os.getenv("MODEL_RANDOM_SEED", "42"))
 
 APPWRITE_ENDPOINT = os.getenv("APPWRITE_ENDPOINT", "")
@@ -87,8 +93,6 @@ APPWRITE_DATABASE_ID = os.getenv("APPWRITE_DATABASE_ID", "rechly-db")
 APPWRITE_INVOICES_COLLECTION_ID = os.getenv(
     "APPWRITE_INVOICES_COLLECTION_ID", "invoices"
 )
-APPWRITE_CLIENTS_COLLECTION_ID = os.getenv(
-    "APPWRITE_CLIENTS_COLLECTION_ID", "clients"
-)
+APPWRITE_CLIENTS_COLLECTION_ID = os.getenv("APPWRITE_CLIENTS_COLLECTION_ID", "clients")
 
-ML_SECRET = os.getenv("ML_SECRET", "")
+ML_SECRET = require_env("ML_SECRET")
