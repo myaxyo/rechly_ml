@@ -5,9 +5,8 @@ from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
-from appwrite.client import Client
-from appwrite.services.databases import Databases
 from appwrite.query import Query
+import requests
 
 from analytics.utils.config import get_appwrite_config
 
@@ -35,8 +34,39 @@ def _to_records(response: Any) -> list[dict[str, Any]]:
     return normalized
 
 
+def _list_documents_page(
+    *,
+    endpoint: str,
+    project_id: str,
+    api_key: str,
+    database_id: str,
+    collection_id: str,
+    page_size: int,
+    offset: int,
+) -> list[dict[str, Any]]:
+    response = requests.get(
+        f"{endpoint}/databases/{database_id}/collections/{collection_id}/documents",
+        headers={
+            "X-Appwrite-Project": project_id,
+            "X-Appwrite-Key": api_key,
+            "Accept": "application/json",
+        },
+        params=[
+            ("queries[]", Query.limit(page_size)),
+            ("queries[]", Query.offset(offset)),
+        ],
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return _to_records(payload)
+
+
 def _paginate_documents(
-    databases: Databases,
+    *,
+    endpoint: str,
+    project_id: str,
+    api_key: str,
     database_id: str,
     collection_id: str,
     page_size: int = 100,
@@ -45,12 +75,15 @@ def _paginate_documents(
     all_records: list[dict[str, Any]] = []
 
     while True:
-        response = databases.list_documents(
+        records = _list_documents_page(
+            endpoint=endpoint,
+            project_id=project_id,
+            api_key=api_key,
             database_id=database_id,
             collection_id=collection_id,
-            queries=[Query.limit(page_size), Query.offset(offset)],
+            page_size=page_size,
+            offset=offset,
         )
-        records = _to_records(response)
         if not records:
             break
 
@@ -65,9 +98,7 @@ def _paginate_documents(
 def _build_client_df(records: Iterable[dict[str, Any]]) -> pd.DataFrame:
     clients_df = pd.DataFrame(list(records))
     if clients_df.empty:
-        return pd.DataFrame(
-            columns=["client_id", "client_name", "client_created_at"]
-        )
+        return pd.DataFrame(columns=["client_id", "client_name", "client_created_at"])
 
     clients_df = clients_df.rename(
         columns={
@@ -138,7 +169,10 @@ def _build_invoice_df(records: Iterable[dict[str, Any]]) -> pd.DataFrame:
     )
     invoices_df["status"] = invoices_df.get("status", "draft").fillna("draft")
 
-    invoices_df["paid_date"] = pd.NaT
+    invoices_df["paid_date"] = pd.Series(pd.NaT, index=invoices_df.index)
+    invoices_df["paid_date"] = pd.to_datetime(
+        invoices_df["paid_date"], errors="coerce", utc=True
+    )
     paid_mask = invoices_df["status"].eq("paid")
     invoices_df.loc[paid_mask, "paid_date"] = invoices_df.loc[paid_mask, "updated_at"]
 
@@ -192,18 +226,17 @@ def _build_invoice_df(records: Iterable[dict[str, Any]]) -> pd.DataFrame:
 def load_appwrite_data() -> LoadedData:
     config = get_appwrite_config()
 
-    client = Client().set_endpoint(config.endpoint).set_project(config.project_id)
-    client.set_key(config.api_key)
-
-    databases = Databases(client)
-
     invoice_records = _paginate_documents(
-        databases=databases,
+        endpoint=config.endpoint,
+        project_id=config.project_id,
+        api_key=config.api_key,
         database_id=config.database_id,
         collection_id=config.invoices_collection_id,
     )
     client_records = _paginate_documents(
-        databases=databases,
+        endpoint=config.endpoint,
+        project_id=config.project_id,
+        api_key=config.api_key,
         database_id=config.database_id,
         collection_id=config.clients_collection_id,
     )

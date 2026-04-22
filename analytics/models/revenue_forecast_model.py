@@ -38,7 +38,9 @@ def _build_daily_paid_series(invoices_df: pd.DataFrame) -> pd.DataFrame:
     if paid.empty:
         return pd.DataFrame(columns=["ds", "y"])
 
-    paid["paid_day"] = pd.to_datetime(paid["paid_date"], utc=True, errors="coerce").dt.floor("D")
+    paid["paid_day"] = pd.to_datetime(
+        paid["paid_date"], utc=True, errors="coerce"
+    ).dt.floor("D")
     paid = paid.dropna(subset=["paid_day"])
 
     grouped = (
@@ -47,7 +49,9 @@ def _build_daily_paid_series(invoices_df: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"paid_day": "ds", "total_gross": "y"})
     )
 
-    full_range = pd.date_range(grouped["ds"].min(), grouped["ds"].max(), freq="D", tz="UTC")
+    full_range = pd.date_range(
+        grouped["ds"].min(), grouped["ds"].max(), freq="D", tz="UTC"
+    )
     grouped = (
         grouped.set_index("ds")
         .reindex(full_range, fill_value=0.0)
@@ -80,10 +84,65 @@ class RevenueForecastModelService:
         self.artifact_dir = Path(get_model_artifact_dir())
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
 
+    def _build_baseline_result(
+        self,
+        *,
+        series: pd.DataFrame,
+        invoices_df: pd.DataFrame,
+        reason: str,
+    ) -> dict[str, Any]:
+        trained_at = datetime.now(timezone.utc).isoformat()
+        version = f"revenue-{trained_at}"
+        baseline_daily_value = float(series["y"].mean()) if not series.empty else 0.0
+        residual_std = float(series["y"].std(ddof=0)) if len(series) > 1 else 0.0
+
+        output = {
+            "training_status": "baseline",
+            "reason": reason,
+            "trained_at": trained_at,
+            "model_version": version,
+            "baseline_daily_value": baseline_daily_value,
+            "data_points": int(len(series)),
+            "paid_invoice_rows": int((invoices_df["status"] == "paid").sum()),
+            "metrics": {
+                "baseline": {
+                    "mae": None,
+                    "rmse": None,
+                    "mape": None,
+                }
+            },
+            "validation_errors": {
+                "naive": [],
+                "moving_average": [],
+                "gradient_boosting": [],
+            },
+            "seed": self.seed,
+        }
+
+        model_file = self.artifact_dir / MODEL_PATH
+        metrics_file = self.artifact_dir / METRICS_PATH
+
+        joblib.dump(
+            {
+                "model_type": "baseline",
+                "daily_value": baseline_daily_value,
+                "residual_std": residual_std,
+                "trained_at": trained_at,
+                "model_version": version,
+            },
+            model_file,
+        )
+        metrics_file.write_text(json.dumps(output, indent=2), encoding="utf-8")
+        return output
+
     def train_model(self, invoices_df: pd.DataFrame) -> dict[str, Any]:
         series = _build_daily_paid_series(invoices_df)
         if len(series) < 120:
-            raise ValueError("Need at least 120 daily points for robust revenue training.")
+            return self._build_baseline_result(
+                series=series,
+                invoices_df=invoices_df,
+                reason="Need at least 120 daily points for robust revenue training.",
+            )
 
         lags = [1, 7, 14, 30]
         frame = _create_regression_frame(series, lags)
@@ -122,7 +181,9 @@ class RevenueForecastModelService:
             naive_preds.extend(naive_pred.tolist())
             ma_preds.extend(ma_pred.tolist())
 
-            naive_errors.extend(np.abs(valid_slice["y"].to_numpy() - naive_pred).tolist())
+            naive_errors.extend(
+                np.abs(valid_slice["y"].to_numpy() - naive_pred).tolist()
+            )
             ma_errors.extend(np.abs(valid_slice["y"].to_numpy() - ma_pred).tolist())
             model_errors.extend(np.abs(valid_slice["y"].to_numpy() - pred).tolist())
 
@@ -134,12 +195,20 @@ class RevenueForecastModelService:
         metrics = {
             "naive": {
                 "mae": float(np.mean(naive_errors)) if naive_errors else None,
-                "rmse": float(np.sqrt(mean_squared_error(y_true, y_naive))) if len(y_true) else None,
+                "rmse": (
+                    float(np.sqrt(mean_squared_error(y_true, y_naive)))
+                    if len(y_true)
+                    else None
+                ),
                 "mape": _mape(y_true, y_naive) if len(y_true) else None,
             },
             "moving_average": {
                 "mae": float(np.mean(ma_errors)) if ma_errors else None,
-                "rmse": float(np.sqrt(mean_squared_error(y_true, y_ma))) if len(y_true) else None,
+                "rmse": (
+                    float(np.sqrt(mean_squared_error(y_true, y_ma)))
+                    if len(y_true)
+                    else None
+                ),
                 "mape": _mape(y_true, y_ma) if len(y_true) else None,
             },
             "gradient_boosting": {
@@ -180,7 +249,9 @@ class RevenueForecastModelService:
         self._save(artifact, feature_columns, lags)
         return output
 
-    def _save(self, artifact: RevenueArtifacts, feature_columns: list[str], lags: list[int]) -> None:
+    def _save(
+        self, artifact: RevenueArtifacts, feature_columns: list[str], lags: list[int]
+    ) -> None:
         model_file = self.artifact_dir / MODEL_PATH
         metrics_file = self.artifact_dir / METRICS_PATH
 
@@ -196,7 +267,9 @@ class RevenueForecastModelService:
             model_file,
         )
 
-        metrics_file.write_text(json.dumps(artifact.metrics, indent=2), encoding="utf-8")
+        metrics_file.write_text(
+            json.dumps(artifact.metrics, indent=2), encoding="utf-8"
+        )
 
     def _load(self) -> dict[str, Any]:
         model_file = self.artifact_dir / MODEL_PATH
@@ -206,6 +279,24 @@ class RevenueForecastModelService:
 
     def forecast(self, invoices_df: pd.DataFrame) -> dict[str, Any]:
         bundle = self._load()
+        if bundle.get("model_type") == "baseline":
+            daily_value = float(bundle.get("daily_value", 0.0))
+            residual_std = float(bundle.get("residual_std", 0.0))
+            next_30 = daily_value * 30
+            next_90 = daily_value * 90
+            interval_multiplier = 1.96
+            total_std_30 = residual_std * np.sqrt(30)
+            return {
+                "next_30_days": float(next_30),
+                "next_90_days": float(next_90),
+                "interval_30_days": {
+                    "lower": float(
+                        max(0.0, next_30 - interval_multiplier * total_std_30)
+                    ),
+                    "upper": float(next_30 + interval_multiplier * total_std_30),
+                },
+            }
+
         model: GradientBoostingRegressor = bundle["model"]
         residual_std: float = float(bundle["residual_std"])
         lags: list[int] = bundle["lags"]
