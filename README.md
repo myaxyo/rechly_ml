@@ -1,6 +1,8 @@
 # Rechly ML API
 
-Optional Django service for Rechly analytics, forecasting, and late-payment risk scoring.
+Optional Django service for [Rechly](https://github.com/myaxyo/rechly_web) analytics, forecasting, and late-payment risk scoring.
+
+> **Part of the Rechly project** — the main web app lives at [myaxyo/rechly_web](https://github.com/myaxyo/rechly_web). This service is optional; the web app degrades gracefully without it.
 
 ## Features
 
